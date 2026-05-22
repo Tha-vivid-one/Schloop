@@ -8,73 +8,119 @@ struct ProcessResult: Equatable {
     var didResize: Bool
     var beforeDim: CGSize
     var afterDim: CGSize
+    var blurredCount: Int = 0
+    var blurredRules: [String] = []   // human-readable rule names of items blurred
 }
 
 enum Pipeline {
-    /// File path: load image, resize if exceeds maxDimension, write back to the same path.
+
+    // MARK: - File path
+
     static func processFile(url: URL, settings: Settings) throws -> ProcessResult {
-        let cgImage = try ImageResizer.loadCGImage(at: url)
-        let beforeDim = CGSize(width: cgImage.width, height: cgImage.height)
-
-        guard settings.quietMode.enabled else {
-            return ProcessResult(didResize: false, beforeDim: beforeDim, afterDim: beforeDim)
+        let original = try ImageResizer.loadCGImage(at: url)
+        let outcome = try processImage(original, settings: settings)
+        if outcome.changed {
+            try ImageResizer.writePNG(cgImage: outcome.image, to: url)
         }
-
-        let longest = max(cgImage.width, cgImage.height)
-        guard longest > settings.quietMode.maxDimension else {
-            return ProcessResult(didResize: false, beforeDim: beforeDim, afterDim: beforeDim)
-        }
-
-        let resized = try ImageResizer.resize(
-            cgImage: cgImage,
-            maxDimension: settings.quietMode.maxDimension
-        )
-        try ImageResizer.writePNG(cgImage: resized, to: url)
-
-        let afterDim = CGSize(width: resized.width, height: resized.height)
-        Log.info("Resized file \(url.lastPathComponent): \(Int(beforeDim.width))×\(Int(beforeDim.height)) → \(Int(afterDim.width))×\(Int(afterDim.height))")
-        return ProcessResult(didResize: true, beforeDim: beforeDim, afterDim: afterDim)
+        Log.info("File \(url.lastPathComponent): \(outcome.result.summary())")
+        return outcome.result
     }
 
-    /// Clipboard path: takes the image found on pasteboard, returns a resized PNG `Data` + dimensions if it
-    /// needed shrinking. Returns nil if already small enough (caller should leave clipboard alone).
-    static func processClipboardImage(_ image: NSImage, settings: Settings) -> (data: Data, before: CGSize, after: CGSize)? {
-        guard settings.quietMode.enabled else { return nil }
+    // MARK: - Clipboard path
 
-        // Pull a CGImage with TRUE pixel dimensions. NSImage.size is in points.
-        guard let cgImage = bestCGImage(from: image) else {
+    static func processClipboardImage(_ image: NSImage, settings: Settings) -> (data: Data, result: ProcessResult)? {
+        guard settings.quietMode.enabled || settings.blur.enabled else { return nil }
+
+        guard let original = bestCGImage(from: image) else {
             Log.error("Clipboard image had no usable CGImage representation")
             return nil
         }
 
-        let beforeDim = CGSize(width: cgImage.width, height: cgImage.height)
-        let longest = max(cgImage.width, cgImage.height)
-        guard longest > settings.quietMode.maxDimension else { return nil }
-
         do {
-            let resized = try ImageResizer.resize(cgImage: cgImage, maxDimension: settings.quietMode.maxDimension)
-            guard let data = pngData(from: resized) else {
-                Log.error("Could not encode resized clipboard image to PNG")
+            let outcome = try processImage(original, settings: settings)
+            if !outcome.changed { return nil }
+            guard let data = pngData(from: outcome.image) else {
+                Log.error("Could not encode processed clipboard image to PNG")
                 return nil
             }
-            let afterDim = CGSize(width: resized.width, height: resized.height)
-            Log.info("Resized clipboard image: \(Int(beforeDim.width))×\(Int(beforeDim.height)) → \(Int(afterDim.width))×\(Int(afterDim.height))")
-            return (data, beforeDim, afterDim)
+            Log.info("Clipboard image: \(outcome.result.summary())")
+            return (data, outcome.result)
         } catch {
-            Log.error("Clipboard resize failed: \(error)")
+            Log.error("Clipboard pipeline failed: \(error)")
             return nil
         }
     }
 
-    /// Picks the largest pixel-dimension representation from an NSImage, then materializes a CGImage from it.
+    // MARK: - Core pipeline
+
+    private struct Outcome {
+        let image: CGImage
+        let result: ProcessResult
+        let changed: Bool
+    }
+
+    /// Runs (optional) blur, then (optional) resize. Both stages may be skipped per settings.
+    /// `changed` is true if either stage modified the image.
+    private static func processImage(_ original: CGImage, settings: Settings) throws -> Outcome {
+        let beforeDim = CGSize(width: original.width, height: original.height)
+
+        // Stage 1: blur (before resize — OCR and bbox math are easier at full res)
+        var current = original
+        var blurredCount = 0
+        var blurredRules: [String] = []
+
+        if settings.blur.enabled {
+            let observations = (try? TextRecognizer.recognize(cgImage: current)) ?? []
+            let matches = SensitiveDetector.scan(observations: observations, rules: settings.blur.rules)
+            if !matches.isEmpty {
+                let rects = matches.map { $0.rect }
+                do {
+                    current = try BlurApplier.blur(
+                        cgImage: current,
+                        rects: rects,
+                        radius: settings.blur.blurRadius
+                    )
+                    blurredCount = matches.count
+                    blurredRules = matches.map { $0.ruleName }
+                } catch {
+                    Log.error("Blur step failed; keeping original: \(error)")
+                }
+            }
+        }
+
+        // Stage 2: resize
+        var didResize = false
+        if settings.quietMode.enabled {
+            let longest = max(current.width, current.height)
+            if longest > settings.quietMode.maxDimension {
+                current = try ImageResizer.resize(
+                    cgImage: current,
+                    maxDimension: settings.quietMode.maxDimension
+                )
+                didResize = true
+            }
+        }
+
+        let afterDim = CGSize(width: current.width, height: current.height)
+        let result = ProcessResult(
+            didResize: didResize,
+            beforeDim: beforeDim,
+            afterDim: afterDim,
+            blurredCount: blurredCount,
+            blurredRules: blurredRules
+        )
+
+        return Outcome(image: current, result: result, changed: didResize || blurredCount > 0)
+    }
+
+    // MARK: - NSImage helpers
+
     private static func bestCGImage(from image: NSImage) -> CGImage? {
-        // Try the bitmap reps first — those have true pixel dimensions.
         let reps = image.representations
         if let bitmap = reps.compactMap({ $0 as? NSBitmapImageRep })
             .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }) {
             return bitmap.cgImage
         }
-        // Fall back to whatever NSImage gives us.
         var rect = CGRect(origin: .zero, size: image.size)
         return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
@@ -90,5 +136,21 @@ enum Pipeline {
         CGImageDestinationAddImage(dest, cgImage, nil)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return mutableData as Data
+    }
+}
+
+private extension ProcessResult {
+    func summary() -> String {
+        var parts: [String] = []
+        if didResize {
+            parts.append("resized \(Int(beforeDim.width))×\(Int(beforeDim.height)) → \(Int(afterDim.width))×\(Int(afterDim.height))")
+        } else {
+            parts.append("kept at \(Int(beforeDim.width))×\(Int(beforeDim.height))")
+        }
+        if blurredCount > 0 {
+            let unique = Array(Set(blurredRules)).sorted().joined(separator: ", ")
+            parts.append("blurred \(blurredCount) item(s): \(unique)")
+        }
+        return parts.joined(separator: ", ")
     }
 }

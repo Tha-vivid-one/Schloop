@@ -30,22 +30,22 @@ struct MenuBarView: View {
             Text("Paused until \(until, style: .time)")
             Button("Resume now") { appState.resume() }
             Divider()
-        } else if !appState.settings.quietMode.enabled {
-            Text("Quiet Mode: Off")
+        } else if !appState.settings.quietMode.enabled && !appState.settings.blur.enabled {
+            Text("Quiet Mode: Off  ·  Blur: Off")
             Divider()
         } else {
-            Text("Quality: \(tier?.name ?? "Custom") (\(appState.settings.quietMode.maxDimension)px)")
+            Text("Quality: \(tier?.name ?? "Custom") (\(appState.settings.quietMode.maxDimension)px)\(appState.settings.blur.enabled ? "  ·  Blur on" : "")")
             Divider()
         }
 
         // Last event
         if let last = appState.last {
             let sourceTag = last.source == .clipboard ? "📋" : "🗂"
-            if last.didResize {
-                Text("\(sourceTag) \(last.label) — \(Int(last.beforeDim.width))×\(Int(last.beforeDim.height)) → \(Int(last.afterDim.width))×\(Int(last.afterDim.height))")
-            } else {
-                Text("\(sourceTag) \(last.label) (skipped — already small)")
-            }
+            let dims = last.didResize
+                ? "\(Int(last.beforeDim.width))×\(Int(last.beforeDim.height)) → \(Int(last.afterDim.width))×\(Int(last.afterDim.height))"
+                : "kept at \(Int(last.beforeDim.width))×\(Int(last.beforeDim.height))"
+            let blur = last.blurredCount > 0 ? "  ·  🫧 \(last.blurredCount) blurred" : ""
+            Text("\(sourceTag) \(last.label) — \(dims)\(blur)")
             Divider()
         }
 
@@ -75,11 +75,9 @@ struct MenuBarView: View {
             }
         }
 
-        // Sources toggle (file watch always on; clipboard can be turned off)
+        // Sources
         Menu("Sources") {
-            Button {
-                // File watch is non-negotiable in v0.1 (only clipboard is toggleable).
-            } label: {
+            Button {} label: {
                 HStack {
                     Image(systemName: "checkmark")
                     Text("Watch screenshot folder (always on)")
@@ -99,7 +97,37 @@ struct MenuBarView: View {
             }
         }
 
-        // Pause submenu
+        // Blur
+        Menu("Blur sensitive") {
+            Button {
+                appState.setBlurEnabled(!appState.settings.blur.enabled)
+            } label: {
+                HStack {
+                    if appState.settings.blur.enabled {
+                        Image(systemName: "checkmark")
+                    }
+                    Text(appState.settings.blur.enabled ? "Enabled" : "Disabled")
+                }
+            }
+
+            Divider()
+            Text("Rules")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(appState.settings.blur.rules) { rule in
+                Button {
+                    appState.setRuleEnabled(rule.id, enabled: !rule.enabled)
+                } label: {
+                    HStack {
+                        if rule.enabled { Image(systemName: "checkmark") }
+                        Text(rule.name)
+                    }
+                }
+            }
+        }
+
+        // Pause
         if !appState.isPaused {
             Menu("Pause") {
                 Button("30 minutes") { appState.pause(minutes: 30) }
@@ -111,7 +139,7 @@ struct MenuBarView: View {
         Divider()
 
         // Stats
-        Text("Resized: \(appState.stats.resized)  (file \(appState.stats.resizedFile), clipboard \(appState.stats.resizedClipboard))  ·  Skipped: \(appState.stats.skipped)")
+        Text("Resized: \(appState.stats.resized) (file \(appState.stats.resizedFile), clipboard \(appState.stats.resizedClipboard))  ·  Blurred: \(appState.stats.blurredImages) imgs / \(appState.stats.blurredItems) items  ·  Skipped: \(appState.stats.skipped)")
             .font(.caption)
 
         Divider()

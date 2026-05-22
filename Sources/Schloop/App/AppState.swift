@@ -6,16 +6,19 @@ import AppKit
 struct LastEvent: Equatable {
     enum Source: String { case file, clipboard }
     var source: Source
-    var label: String          // "Screenshot ...png" or "clipboard image"
+    var label: String
     var beforeDim: CGSize
     var afterDim: CGSize
     var didResize: Bool
+    var blurredCount: Int
     var at: Date
 }
 
 struct Stats: Equatable {
     var resizedFile: Int = 0
     var resizedClipboard: Int = 0
+    var blurredImages: Int = 0
+    var blurredItems: Int = 0
     var skipped: Int = 0
     var totalSeen: Int = 0
     var resized: Int { resizedFile + resizedClipboard }
@@ -49,7 +52,6 @@ final class AppState: ObservableObject {
     }
 
     func startWatching() {
-        // File watcher
         fileWatcher?.stop()
         let folder = watchedFolder
         let fw = ScreenshotWatcher(folder: folder) { [weak self] url in
@@ -58,7 +60,6 @@ final class AppState: ObservableObject {
         fw.start()
         fileWatcher = fw
 
-        // Clipboard watcher
         clipboardWatcher?.stop()
         let cw = ClipboardWatcher { [weak self] image in
             self?.handleClipboardImage(image)
@@ -78,22 +79,9 @@ final class AppState: ObservableObject {
             return
         }
 
-        guard settings.quietMode.enabled else {
-            stats.skipped += 1
-            return
-        }
-
         do {
             let result = try Pipeline.processFile(url: url, settings: settings)
-            if result.didResize { stats.resizedFile += 1 } else { stats.skipped += 1 }
-            last = LastEvent(
-                source: .file,
-                label: url.lastPathComponent,
-                beforeDim: result.beforeDim,
-                afterDim: result.afterDim,
-                didResize: result.didResize,
-                at: Date()
-            )
+            recordResult(result, source: .file, label: url.lastPathComponent)
         } catch {
             Log.error("File pipeline failed for \(url.lastPathComponent): \(error)")
         }
@@ -110,38 +98,51 @@ final class AppState: ObservableObject {
             return
         }
 
-        guard let result = Pipeline.processClipboardImage(image, settings: settings) else {
-            // No-op: either disabled, image not large enough, or encoding failed.
+        guard let outcome = Pipeline.processClipboardImage(image, settings: settings) else {
             return
         }
 
         stats.totalSeen += 1
 
-        // Write the resized image back. Use writeObjects so NSImage advertises the right types.
         let pb = NSPasteboard.general
         pb.clearContents()
-        if let resizedImage = NSImage(data: result.data) {
+        if let resizedImage = NSImage(data: outcome.data) {
             pb.writeObjects([resizedImage])
         } else {
-            // Fallback: write PNG bytes directly.
-            pb.setData(result.data, forType: .png)
+            pb.setData(outcome.data, forType: .png)
         }
-
-        // Sync our baseline to the post-write count. Any subsequent change is by definition not ours.
         clipboardWatcher?.acknowledgeOurWrite()
 
-        stats.resizedClipboard += 1
+        recordResult(outcome.result, source: .clipboard, label: "clipboard image")
+    }
+
+    // MARK: - Stats
+
+    private func recordResult(_ result: ProcessResult, source: LastEvent.Source, label: String) {
+        if result.didResize {
+            switch source {
+            case .file: stats.resizedFile += 1
+            case .clipboard: stats.resizedClipboard += 1
+            }
+        } else if result.blurredCount == 0 {
+            stats.skipped += 1
+        }
+        if result.blurredCount > 0 {
+            stats.blurredImages += 1
+            stats.blurredItems += result.blurredCount
+        }
         last = LastEvent(
-            source: .clipboard,
-            label: "clipboard image",
-            beforeDim: result.before,
-            afterDim: result.after,
-            didResize: true,
+            source: source,
+            label: label,
+            beforeDim: result.beforeDim,
+            afterDim: result.afterDim,
+            didResize: result.didResize,
+            blurredCount: result.blurredCount,
             at: Date()
         )
     }
 
-    // MARK: - Settings
+    // MARK: - Settings mutations
 
     func applySettings(_ newSettings: Settings) {
         let folderChanged = newSettings.quietMode.customScreenshotFolder
@@ -168,6 +169,20 @@ final class AppState: ObservableObject {
         var s = settings
         s.quietMode.clipboardEnabled = enabled
         applySettings(s)
+    }
+
+    func setBlurEnabled(_ enabled: Bool) {
+        var s = settings
+        s.blur.enabled = enabled
+        applySettings(s)
+    }
+
+    func setRuleEnabled(_ ruleId: String, enabled: Bool) {
+        var s = settings
+        if let idx = s.blur.rules.firstIndex(where: { $0.id == ruleId }) {
+            s.blur.rules[idx].enabled = enabled
+            applySettings(s)
+        }
     }
 
     func pause(minutes: Int) {
