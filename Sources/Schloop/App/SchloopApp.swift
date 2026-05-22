@@ -10,9 +10,26 @@ struct SchloopApp: App {
         MenuBarExtra {
             MenuBarView(appState: appState)
         } label: {
-            Image(systemName: "photo.badge.checkmark")
+            MenuBarLabel(appState: appState)
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Menu bar icon. Swaps based on app state:
+/// - active     → `photo.badge.checkmark` (processing screenshots normally)
+/// - paused     → `pause.circle.fill` (pause timer active)
+/// - disabled   → `photo` (Quiet Mode off — "Original" tier selected)
+struct MenuBarLabel: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        let symbol: String = {
+            if appState.isPaused { return "pause.circle.fill" }
+            if !appState.settings.quietMode.enabled { return "photo" }
+            return "photo.badge.checkmark"
+        }()
+        Image(systemName: symbol)
     }
 }
 
