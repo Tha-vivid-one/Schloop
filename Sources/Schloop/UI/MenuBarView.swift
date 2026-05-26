@@ -25,18 +25,18 @@ struct MenuBarView: View {
     var body: some View {
         let tier = QualityTier.match(appState.settings.quietMode.maxDimension)
 
-        // Header
+        // Header — always shows both states so it's never ambiguous what's on
         if appState.isPaused, let until = appState.pauseUntil {
             Text("Paused until \(until, style: .time)")
             Button("Resume now") { appState.resume() }
-            Divider()
-        } else if !appState.settings.quietMode.enabled && !appState.settings.blur.enabled {
-            Text("Quiet Mode: Off  ·  Blur: Off")
-            Divider()
         } else {
-            Text("Quality: \(tier?.name ?? "Custom") (\(appState.settings.quietMode.maxDimension)px)\(appState.settings.blur.enabled ? "  ·  Blur on" : "")")
-            Divider()
+            let qualityText = appState.settings.quietMode.enabled
+                ? "\(tier?.name ?? "Custom") (\(appState.settings.quietMode.maxDimension)px)"
+                : "Off"
+            let blurText = appState.settings.blur.enabled ? "On" : "Off"
+            Text("Resize: \(qualityText)  ·  Blur: \(blurText)")
         }
+        Divider()
 
         // Last event
         if let last = appState.last {
@@ -97,21 +97,27 @@ struct MenuBarView: View {
             }
         }
 
-        // Blur
-        Menu("Blur sensitive") {
+        // Blur — parent label shows state, inside has explicit On/Off radio + rules
+        Menu(appState.settings.blur.enabled ? "Blur sensitive: On" : "Blur sensitive: Off") {
             Button {
-                appState.setBlurEnabled(!appState.settings.blur.enabled)
+                appState.setBlurEnabled(true)
             } label: {
                 HStack {
-                    if appState.settings.blur.enabled {
-                        Image(systemName: "checkmark")
-                    }
-                    Text(appState.settings.blur.enabled ? "Enabled" : "Disabled")
+                    if appState.settings.blur.enabled { Image(systemName: "checkmark") }
+                    Text("On — blur known sensitive strings before saving")
+                }
+            }
+            Button {
+                appState.setBlurEnabled(false)
+            } label: {
+                HStack {
+                    if !appState.settings.blur.enabled { Image(systemName: "checkmark") }
+                    Text("Off — never auto-blur")
                 }
             }
 
             Divider()
-            Text("Rules")
+            Text("Rules (which patterns to detect)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -124,6 +130,7 @@ struct MenuBarView: View {
                         Text(rule.name)
                     }
                 }
+                .disabled(!appState.settings.blur.enabled)
             }
         }
 

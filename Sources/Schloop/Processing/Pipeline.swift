@@ -72,6 +72,7 @@ enum Pipeline {
         if settings.blur.enabled {
             let observations = (try? TextRecognizer.recognize(cgImage: current)) ?? []
             let matches = SensitiveDetector.scan(observations: observations, rules: settings.blur.rules)
+            Log.debug("Blur scan: OCR found \(observations.count) observations, \(matches.count) matches")
             if !matches.isEmpty {
                 let rects = matches.map { $0.rect }
                 do {
