@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Schloop LaunchAgent template.
+
+  This file is the source of truth for the user-level LaunchAgent.
+  Real installed copy lives at: ~/Library/LaunchAgents/com.schloop.app.plist
+  Install/refresh with: ./scripts/install.sh
+
+  Note: ProgramArguments hard-codes /Users/jarretttruett/...
+  The install script rewrites that path to $HOME for portability.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.schloop.app</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__SCHLOOP_BINARY__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>__SCHLOOP_LOG_OUT__</string>
+
+    <key>StandardErrorPath</key>
+    <string>__SCHLOOP_LOG_ERR__</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

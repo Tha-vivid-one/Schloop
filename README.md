@@ -16,14 +16,41 @@ A post-processor for macOS screenshots. Quiet menu bar app. Watches your screens
 
 Requires macOS 13+ and a recent Xcode / command-line tools.
 
+### Quick dev run
+
 ```bash
 cd "/Users/jarretttruett/Documents/01 Projects/Tools/Schloop"
-swift run Schloop
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run Schloop
 ```
 
 The menu bar icon (✅ on a picture) appears top-right. Take a screenshot. Watch it shrink.
 
 To stop: click the icon → Quit Schloop. (Or `Ctrl+C` in the terminal.)
+
+### Install for daily use (survives Mac restarts)
+
+One command — builds release, installs the binary + LaunchAgent, starts it under launchd:
+
+```bash
+./scripts/install.sh
+```
+
+After install:
+- Schloop auto-starts every login (`RunAtLoad`)
+- Auto-restarts on crash (`KeepAlive.Crashed`)
+- Does NOT restart when you Quit it from the menu (`KeepAlive.SuccessfulExit: false`)
+- Shows up in [ArgusMenuBar](../ArgusMenuBar/) like your other LaunchAgents
+
+Manual controls:
+
+```bash
+launchctl list | grep schloop                                # check status
+launchctl kickstart -k "gui/$(id -u)/com.schloop.app"         # force restart
+launchctl bootout "gui/$(id -u)/com.schloop.app"              # stop (won't return until login)
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.schloop.app.plist   # start
+```
+
+Rerun `./scripts/install.sh` any time you want to ship a new version to your own machine.
 
 ## Open in Xcode
 
